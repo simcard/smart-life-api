@@ -1,8 +1,9 @@
 import express from "express";
 import { pool } from "../dbclient.js";
 import { authMiddleware } from "../auth.js";
-import bcrypt from 'bcrypt';
 import dotenv from "dotenv";
+import bcrypt from "bcrypt";
+import jwt from "jsonwebtoken";
 
 dotenv.config();
 
@@ -11,6 +12,85 @@ const usersRouter = express.Router();
 /* ======================================================
    Constants
 ====================================================== */
+/**
+ * @swagger
+ * /api/login:
+ *   post:
+ *     summary: Login user and receive JWT token
+ *     tags: [Auth]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - email
+ *               - password
+ *             properties:
+ *               email:
+ *                 type: string
+ *                 example: test@email.com
+ *               password:
+ *                 type: string
+ *                 example: 123456
+ *     responses:
+ *       200:
+ *         description: Login successful
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 token:
+ *                   type: string
+ *                 user:
+ *                   $ref: '#/components/schemas/User'
+ *       400:
+ *         description: Invalid email or password
+ */
+
+usersRouter.post('/login', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+
+    const { rows } = await pool.query(
+      'SELECT id, email, full_name, password_hash FROM users WHERE email = $1',
+      [email]
+    );
+
+    if (!rows.length) {
+      return res.status(400).json({ error: 'Invalid email or password' });
+    }
+
+    const user = rows[0];
+
+    const isMatch = await bcrypt.compare(password, user.password_hash);
+
+    if (!isMatch) {
+      return res.status(400).json({ error: 'Invalid email or password' });
+    }
+
+    const token = jwt.sign(
+      { id: user.id, email: user.email },
+      process.env.JWT_SECRET,
+      { expiresIn: process.env.JWT_EXPIRES_IN || '1d' }
+    );
+
+    res.json({
+      token,
+      user: {
+        id: user.id,
+        email: user.email,
+        full_name: user.full_name,
+      }
+    });
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
 
 /**
  * @swagger
