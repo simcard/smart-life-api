@@ -61,7 +61,7 @@ usersRouter.post("/login", async (req, res) => {
    WHERE u.email = $1`,
       [email],
     );
-  console.log(rows);
+
     if (!rows.length) {
       return res.status(400).json({ error: "Invalid email or password" });
     }
@@ -181,33 +181,59 @@ usersRouter.get("/users", authMiddleware, async (req, res) => {
  *         description: Email already exists
  */
 usersRouter.post("/users", async (req, res) => {
+  const client = await pool.connect();
+
   try {
     const { email, password, full_name, avatar_url, plan_type } = req.body;
 
-    const existing = await pool.query("SELECT id FROM users WHERE email = $1", [
-      email,
-    ]);
-    if (existing.rows.length)
-      return res.status(400).json({ error: "Email already exists" });
+    await client.query("BEGIN");
 
-    const password_hash = await bcrypt.hash(password, 10);
-    const { rows } = await pool.query(
-      "INSERT INTO users (email, password_hash, full_name, avatar_url, plan_type) VALUES ($1, $2, $3, $4, $5) RETURNING id, email, full_name",
-      [
-        email,
-        password_hash,
-        full_name || null,
-        avatar_url || null,
-        plan_type || null,
-      ],
+    const existing = await client.query(
+      "SELECT id FROM users WHERE email = $1",
+      [email]
     );
 
-    res.json({ user: rows[0] });
+    if (existing.rows.length) {
+      return res.status(400).json({ error: "Email already exists" });
+    }
+
+    const password_hash = await bcrypt.hash(password, 10);
+
+    // 1️⃣ Insert into users
+    const { rows } = await client.query(
+      `INSERT INTO users (email, password_hash)
+       VALUES ($1, $2)
+       RETURNING id, email`,
+      [email, password_hash]
+    );
+
+    const user = rows[0];
+
+    // 2️⃣ Insert into profiles
+    await client.query(
+      `INSERT INTO profiles (user_id, full_name, avatar_url, plan_type)
+       VALUES ($1, $2, $3, $4)`,
+      [
+        user.id,
+        full_name || null,
+        avatar_url || null,
+        plan_type || "family",
+      ]
+    );
+
+    await client.query("COMMIT");
+
+    res.json({ user });
+
   } catch (err) {
+    await client.query("ROLLBACK");
     console.error(err);
     res.status(500).json({ error: "Internal server error" });
+  } finally {
+    client.release();
   }
 });
+
 
 /**
  * @swagger
