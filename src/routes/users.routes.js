@@ -50,17 +50,20 @@ const usersRouter = express.Router();
  *         description: Invalid email or password
  */
 
-usersRouter.post('/login', async (req, res) => {
+usersRouter.post("/login", async (req, res) => {
   try {
     const { email, password } = req.body;
 
     const { rows } = await pool.query(
-      'SELECT id, email, full_name, password_hash FROM users WHERE email = $1',
-      [email]
+      `SELECT u.id, u.email, u.full_name, u.password_hash, p.plan_type
+   FROM users u
+   JOIN profiles p ON u.id = p.user_id
+   WHERE u.email = $1`,
+      [email],
     );
-
+  console.log(rows);
     if (!rows.length) {
-      return res.status(400).json({ error: 'Invalid email or password' });
+      return res.status(400).json({ error: "Invalid email or password" });
     }
 
     const user = rows[0];
@@ -68,13 +71,13 @@ usersRouter.post('/login', async (req, res) => {
     const isMatch = await bcrypt.compare(password, user.password_hash);
 
     if (!isMatch) {
-      return res.status(400).json({ error: 'Invalid email or password' });
+      return res.status(400).json({ error: "Invalid email or password" });
     }
 
     const token = jwt.sign(
       { id: user.id, email: user.email },
       process.env.JWT_SECRET,
-      { expiresIn: process.env.JWT_EXPIRES_IN || '1d' }
+      { expiresIn: process.env.JWT_EXPIRES_IN || "1d" },
     );
 
     res.json({
@@ -83,12 +86,12 @@ usersRouter.post('/login', async (req, res) => {
         id: user.id,
         email: user.email,
         full_name: user.full_name,
-      }
+        plan_type: user.plan_type,
+      },
     });
-
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: 'Internal server error' });
+    res.status(500).json({ error: "Internal server error" });
   }
 });
 
@@ -129,16 +132,17 @@ usersRouter.post('/login', async (req, res) => {
  *               items:
  *                 $ref: '#/components/schemas/User'
  */
-usersRouter.get('/users', authMiddleware, async (req, res) => {
+usersRouter.get("/users", authMiddleware, async (req, res) => {
   try {
-    const { rows } = await pool.query('SELECT * FROM public.users ORDER BY created_at DESC');
+    const { rows } = await pool.query(
+      "SELECT * FROM public.users ORDER BY created_at DESC",
+    );
     res.json(rows);
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: 'Internal server error' });
+    res.status(500).json({ error: "Internal server error" });
   }
 });
-
 
 /**
  * @swagger
@@ -164,6 +168,8 @@ usersRouter.get('/users', authMiddleware, async (req, res) => {
  *                 type: string
  *               password:
  *                 type: string
+ *               plan_type:
+ *                 type: string
  *     responses:
  *       201:
  *         description: User created successfully
@@ -174,25 +180,32 @@ usersRouter.get('/users', authMiddleware, async (req, res) => {
  *       400:
  *         description: Email already exists
  */
-usersRouter.post('/users', async (req, res) => {
-
+usersRouter.post("/users", async (req, res) => {
   try {
-    const { email, password, full_name, avatar_url } = req.body;
+    const { email, password, full_name, avatar_url, plan_type } = req.body;
 
-  const existing = await pool.query('SELECT id FROM users WHERE email = $1', [email]);
-  if (existing.rows.length) return res.status(400).json({ error: 'Email already exists' });
+    const existing = await pool.query("SELECT id FROM users WHERE email = $1", [
+      email,
+    ]);
+    if (existing.rows.length)
+      return res.status(400).json({ error: "Email already exists" });
 
-  const password_hash = await bcrypt.hash(password, 10);
-  const { rows } = await pool.query(
-    'INSERT INTO users (email, password_hash, full_name, avatar_url) VALUES ($1, $2, $3, $4) RETURNING id, email, full_name',
-    [email, password_hash, full_name || null, avatar_url || null]
-  );
+    const password_hash = await bcrypt.hash(password, 10);
+    const { rows } = await pool.query(
+      "INSERT INTO users (email, password_hash, full_name, avatar_url, plan_type) VALUES ($1, $2, $3, $4, $5) RETURNING id, email, full_name",
+      [
+        email,
+        password_hash,
+        full_name || null,
+        avatar_url || null,
+        plan_type || null,
+      ],
+    );
 
-
-  res.json({ user: rows[0]});
+    res.json({ user: rows[0] });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: 'Internal server error' });
+    res.status(500).json({ error: "Internal server error" });
   }
 });
 
@@ -236,7 +249,7 @@ usersRouter.post('/users', async (req, res) => {
  *       404:
  *         description: User not found
  */
-usersRouter.put('/users/:id', async (req, res) => {
+usersRouter.put("/users/:id", async (req, res) => {
   const { id } = req.params;
   const { email, full_name, password, avatar_url } = req.body;
 
@@ -249,19 +262,26 @@ usersRouter.put('/users/:id', async (req, res) => {
            avatar_url = COALESCE($4, avatar_url)
        WHERE id = $5
        RETURNING *`,
-      [email, full_name, password ? await bcrypt.hash(password, 10) : null,  avatar_url, id]
+      [
+        email,
+        full_name,
+        password ? await bcrypt.hash(password, 10) : null,
+        avatar_url,
+        id,
+      ],
     );
 
-    if (rows.length === 0) return res.status(404).json({ error: 'User not found' });
+    if (rows.length === 0)
+      return res.status(404).json({ error: "User not found" });
 
     res.json(rows[0]);
   } catch (err) {
-    if (err.code === '23505') {
+    if (err.code === "23505") {
       // unique_violation
-      return res.status(400).json({ error: 'Email already exists' });
+      return res.status(400).json({ error: "Email already exists" });
     }
     console.error(err);
-    res.status(500).json({ error: 'Internal server error' });
+    res.status(500).json({ error: "Internal server error" });
   }
 });
 
